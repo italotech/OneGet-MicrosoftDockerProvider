@@ -5,15 +5,15 @@ The Docker installer for Windows is now available in an online package repositor
 
 ##### Step 1: Install the OneGet docker provider
 
-1. `Import-Module -Name DockerMsftProvider -Force`
-2. `Import-Packageprovider -Name DockerMsftProvider -Force`
+1. `Import-Module -Name DockerProvider -Force`
+2. `Import-Packageprovider -Name DockerProvider -Force`
 
 ##### Step 2: Install Docker
 *New installation:*  
-`Install-Package -Name docker -ProviderName DockerMsftProvider -Verbose`  
+`Install-Package -Name docker -ProviderName DockerProvider -Verbose`  
 
 *Upgrade to the latest version of docker:*  
-`Install-Package -Name docker -ProviderName DockerMsftProvider -Verbose -Update`
+`Install-Package -Name docker -ProviderName DockerProvider -Verbose -Update`
 
 Once the provider is installed and imported, you can search, download, or install Docker using OneGet PowerShell cmdlets:
 * Find-Package
@@ -24,54 +24,54 @@ Once the provider is installed and imported, you can search, download, or instal
 
 #### Register a source
 
-##### Register an URL to be used with DockerMsftProvider
-	Register-PackageSource -ProviderName DockerMsftProvider -Name AlternateSource -Location https://contoso.com/metaData.json
+##### Register an URL to be used with DockerProvider
+	Register-PackageSource -ProviderName DockerProvider -Name AlternateSource -Location https://contoso.com/metaData.json
 
 ##### Enlist all the registered sources
-	Get-PackageSource -ProviderName DockerMsftProvider
+	Get-PackageSource -ProviderName DockerProvider
 
 #### Search a Docker installer 
 
 ##### Example 1: Find the latest version of all available Docker installers. 
-	Find-Package –providerName DockerMsftProvider
+	Find-Package –providerName DockerProvider
    
 ##### Example 2: Search by version, according to –RequiredVersion, -MinimumVersion, and –MaximumVersion requirements. With –AllVersions parameter, all available versions of Docker installers are returned. Without it, only the latest version is returned.
-    Find-Package –providerName DockerMsftProvider –AllVersions
+    Find-Package –providerName DockerProvider –AllVersions
 
 #### Install docker
 
 ##### Example 1: Install the latest version of docker to the local machine.
-	Install-Package -Name docker -ProviderName DockerMsftProvider -Verbose
+	Install-Package -Name docker -ProviderName DockerProvider -Verbose
 
 ##### Example 2: Install docker with pipeline result from the search cmdlets.	
-	Find-Package –ProviderName DockerMsftProvider | Install-Package -Verbose
+	Find-Package –ProviderName DockerProvider | Install-Package -Verbose
 
 #### Download Docker
 You can download and save Docker installer without installation, using Save-Package. This cmdlet accepts pipeline result from the search cmdlets. If you have multiple sources, please provide the source for download.
 
 ##### Example 1: Download and save Docker installer to a directory that matches the wildcard path. The latest version will be saved if you do not specify the version requirements.	
-	Save-Package –ProviderName DockerMsftProvider -Name Docker -Path .\temp -MinimumVersion 1.2.3
+	Save-Package –ProviderName DockerProvider -Name Docker -Path .\temp -MinimumVersion 1.2.3
 
 ##### Example 2: Download and save Docker installer from the search cmdlets.
-	Find-package –ProviderName DockerMsftProvider | Save-Package -Path .
+	Find-package –ProviderName DockerProvider | Save-Package -Path .
 
 #### Get docker
 
 
 ##### Example 1: Inventory docker installation on the local machine.
-	 Get-Package –ProviderName DockerMsftProvider
+	 Get-Package –ProviderName DockerProvider
 
 #### Uninstall docker
 Uninstalls Docker from the local machine.
 
 ##### Example 1: Uninstall docker from the local machine.
-	Uninstall-Package -ProviderName DockerMsftProvider -Name dOcKeR -Verbose
+	Uninstall-Package -ProviderName DockerProvider -Name dOcKeR -Verbose
 
 #### Update docker
 Updates current installation of docker with the requested version
 
 ##### Example 1: Update docker
-	Install-Package -Name docker -ProviderName DockerMsftProvider -Verbose -Update
+	Install-Package -Name docker -ProviderName DockerProvider -Verbose -Update
 
 ### Manual Steps
     Once docker is installed, you will need to restart the machine

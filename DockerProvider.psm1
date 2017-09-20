@@ -1,9 +1,7 @@
 
 #########################################################################################
 #
-# Copyright (c) Microsoft Corporation. All rights reserved.
-#
-# DockerMsftProvider
+# DockerProvider
 #
 #########################################################################################
 
@@ -11,14 +9,14 @@ Microsoft.PowerShell.Core\Set-StrictMode -Version Latest
 
 #region variables
 
-$script:Providername = "DockerMsftProvider"
+$script:Providername = "DockerProvider"
 $script:DockerSources = $null
 $script:location_modules = Microsoft.PowerShell.Management\Join-Path -Path $env:TEMP -ChildPath $script:ProviderName
 $script:location_sources= Microsoft.PowerShell.Management\Join-Path -Path $env:LOCALAPPDATA -ChildPath $script:ProviderName
 $script:file_modules = Microsoft.PowerShell.Management\Join-Path -Path $script:location_sources -ChildPath "sources.txt"
 $script:DockerSearchIndex = "DockerSearchIndex.json"
 $script:Installer_Extension = "zip"
-$script:dockerURL = "https://go.microsoft.com/fwlink/?LinkID=825636&clcid=0x409"
+$script:dockerURL = "https://download.docker.com/components/engine/windows-server/index.json"
 $separator = "|#|"
 $script:restartRequired = $false
 $script:isNanoServerInitialized = $false
@@ -38,7 +36,6 @@ $script:hotFixID = 'KB3176936'
 $script:minOsMajorBuild = 14393
 $script:minOSRevision= 206
 $script:MetadataFileName = 'metadata.json'
-$script:serviceName = "docker"
 $script:SemVerTypeName = 'Microsoft.PackageManagement.Provider.Utility.SemanticVersion'
 if('Microsoft.PackageManagement.NuGetProvider.SemanticVersion' -as [Type])
 {
@@ -99,19 +96,19 @@ function Find-Package
 
     foreach($currSource in $allSources)
     {
-        $Location = $currSource.SourceLocation
+        $location = $currSource.SourceLocation
         $sourceName = $currSource.Name
 
         if($location.StartsWith("https://"))
         {
             $tempResults = @()
             $tempResults += Find-FromUrl -Source $Location `
-                                            -SourceName $sourceName `
-                                            -Name $names `
-                                            -MinimumVersion $MinimumVersion `
-                                            -MaximumVersion $MaximumVersion `
-                                            -RequiredVersion $RequiredVersion `
-                                            -AllVersions:$AllVersions
+                                         -SourceName $sourceName `
+                                         -Name $names `
+                                         -MinimumVersion $MinimumVersion `
+                                         -MaximumVersion $MaximumVersion `
+                                         -RequiredVersion $RequiredVersion `
+                                         -AllVersions:$AllVersions
 
             if($tempResults)
             {
@@ -244,7 +241,7 @@ function Install-Package
         # Install WindowsFeature containers
         try
         {
-            InstallContainer
+            InstallFeature -Feature Containers
         }
         catch
         {
@@ -309,7 +306,25 @@ function Install-Package
             $service = get-service -Name Docker -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
             if(-not $service)
             {
-                $null = New-Service -Name Docker -BinaryPathName "$env:ProgramFiles\Docker\dockerd.exe --run-service"
+                $command = "$env:ProgramFiles\Docker\dockerd.exe --run-service"
+
+                # Enable experimental and Hyper-V for preview builds, but revisit later.
+                if ($version -match 'preview')
+                {
+                    $command += " --experimental"
+
+                    # Install Hyper-V
+                    try
+                    {
+                        InstallFeature -Feature Hyper-V
+                    }
+                    catch
+                    {
+                        Write-Verbose "Failed to install Hyper-V."
+                    }
+                }
+
+                $null = New-Service -Name Docker -BinaryPathName $command
             }
         }
         else
@@ -341,7 +356,11 @@ function Install-Package
 
     if($script:restartRequired)
     {
-        Write-Warning "A restart is required to enable the containers feature. Please restart your machine."
+        Write-Warning "A restart is required to enable the one or more features. Please restart your machine."
+    }
+    else
+    {
+        $null = Start-Service Docker
     }
 
     Write-Output $downloadOutput
@@ -361,7 +380,7 @@ function Uninstall-Package
     UninstallHelper
 
     Write-Verbose "Uninstalling container feature from windows"
-    UninstallContainer
+    UninstallFeature -Feature Containers
 
     [string[]] $splitterArray = @("$separator")
     [string[]] $resultArray = $fastPackageReference.Split($splitterArray, [System.StringSplitOptions]::None)
@@ -407,7 +426,7 @@ function Get-InstalledPackage
         [string]$maximumVersion
     )
 
-    $name = 'docker'
+    $name = 'Docker'
     $version = ''
     $source = ''
 
@@ -532,6 +551,7 @@ function UninstallHelper
         $null = Get-ChildItem -Path $env:ProgramFiles\Docker -Recurse | Remove-Item -force -Recurse
 
         if(Test-Path $env:ProgramFiles\Docker) {$null = Remove-Item $env:ProgramFiles\Docker -Force}
+        if(Test-Path "$env:ProgramFiles\Linux Containers") {$null = Remove-Item "$env:ProgramFiles\Linux Containers" -Force -Recuse}
     }
     else 
     {
@@ -542,34 +562,42 @@ function UninstallHelper
     $null = Remove-PathVar
 }
 
-function InstallContainer
+function InstallFeature
 {
+    param
+    (
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $Feature
+    )
+
     if(IsNanoServer)
     {        
         if(HandleProvider)
         {
-            $containerExists = get-package -providername NanoServerPackage -Name *container* -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            $exists = get-package -providername NanoServerPackage -Name *$Feature* -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
 
-            if($containerExists)
+            if($exists)
             {
-                Write-Verbose "Containers package is already installed. Skipping the install."
+                Write-Verbose "$Feature package is already installed. Skipping the install."
                 return
             }
 
-            # Find Container Package
-            $containerPackage = Find-NanoServerPackage -Name *Container* -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            # Find  Package
+            $package = Find-NanoServerPackage -Name *$Feature* -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
 
-            if(-not $containerPackage)
+            if(-not $package)
             {
                 ThrowError -ExceptionName "System.ArgumentException" `
-                            -ExceptionMessage "Unable to find the Containers Package from NanoServerPackage Module." `
+                            -ExceptionMessage "Unable to find the $Feature Package from NanoServerPackage Module." `
                             -ErrorId "PackageNotFound" `
                             -CallerPSCmdlet $PSCmdlet `
                             -ErrorCategory InvalidOperation
             }
 
-            Write-Verbose "Installing Containers..."
-            $null = $containerPackage | Install-NanoServerPackage -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            Write-Verbose "Installing $Feature..."
+            $null = $package | Install-NanoServerPackage -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             $script:restartRequired = $true
         }
         else
@@ -585,32 +613,40 @@ function InstallContainer
     {
         switch(Get-wmiobject -class win32_operatingsystem | select-object -ExpandProperty Caption ){                
             'Microsoft Windows 10' {
-                $containerExists = Get-WindowsOptionalFeature -Online -FeatureName Containers | 
+                $exists = Get-WindowsOptionalFeature -Online -FeatureName $Feature |
                 Select-object -Property *,@{name='Installed';expression={$_.State -eq 'Enabled'}}
             }
-            Default {$containerExists = Get-WindowsFeature -Name Containers}
+            Default {$exists = Get-WindowsFeature -Name $Feature}
         }
-        if($containerExists -and $containerExists.Installed)
+        if($exists -and $exists.Installed)
         {
-            Write-Verbose "Containers feature is already installed. Skipping the install."
+            Write-Verbose "$Feature feature is already installed. Skipping the install."
             return
         }
         else
         {
-            Write-Verbose "Installing Containers..."
+            Write-Verbose "Installing $Feature..."
             switch(Get-wmiobject -class win32_operatingsystem | select-object -ExpandProperty Caption ){                
-                'Microsoft Windows 10' {$null = Enable-WindowsOptionalFeature -FeatureName Containers}
-                Default {$null = Install-WindowsFeature containers}
+                'Microsoft Windows 10' {$null = Enable-WindowsOptionalFeature -FeatureName $Feature}
+                Default {$null = Install-WindowsFeature $Feature}
             }
             $script:restartRequired = $true            
         }
     }
 
-    Write-Verbose "Installed containers"
+    Write-Verbose "Installed $Feature"
 }
 
-function UninstallContainer
+function UninstallFeature
 {
+    param
+    (
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $Feature
+    )
+
     if(IsNanoServer)
     {
         return
@@ -618,8 +654,8 @@ function UninstallContainer
     else
     {
         switch(Get-wmiobject -class win32_operatingsystem | select-object -ExpandProperty Caption ){
-            'Microsoft Windows 10' {$null = Disable-WindowsOptionalFeature -FeatureName Containers}
-            Default {$null = Uninstall-WindowsFeature containers        }
+            'Microsoft Windows 10' { $null = Disable-WindowsOptionalFeature -FeatureName $Feature }
+            Default { $null = Uninstall-WindowsFeature $Feature }
         }
         
     }
@@ -749,28 +785,6 @@ function Remove-PathVar
     }
 }
 
-function Set-ModuleSourcesVariable
-{
-    if(Microsoft.PowerShell.Management\Test-Path $script:file_modules)
-    {
-        $script:DockerSources = DeSerialize-PSObject -Path $script:file_modules
-    }
-    else
-    {
-        $script:DockerSources = [ordered]@{}
-        $defaultModuleSource = Microsoft.PowerShell.Utility\New-Object PSCustomObject -Property ([ordered]@{
-            Name = "DockerDefault"
-            SourceLocation = $script:dockerURL
-            Trusted=$false
-            Registered= $true
-            InstallationPolicy = "Untrusted"
-        })
-
-        $script:DockerSources.Add("DockerDefault", $defaultModuleSource)
-        Save-ModuleSources
-    }
-}
-
 function DeSerialize-PSObject
 {
     [CmdletBinding(PositionalBinding=$false)]
@@ -828,6 +842,27 @@ function Get-SourceList
     }
 
     return $listOfSources
+}
+
+function Resolve-ChannelAlias
+{
+    param
+    (
+        [Parameter(Mandatory=$true)]
+        [psobject]
+        $Channels,
+
+        [Parameter(Mandatory=$true)]
+        [String]
+        $Channel
+    )
+
+    while ($Channels.$Channel.PSObject.Properties.Name -contains 'alias')
+    {
+        $Channel = $Channels.$Channel.alias
+    }
+
+    return $Channel
 }
 
 function Find-FromUrl
@@ -890,8 +925,6 @@ function Find-FromUrl
     $contents = $updatedContent | ConvertFrom-Json
     $channels = $contents.channels
     $versions = $contents.versions
-    $csName = $channels.cs.alias
-    $csVersion = $channels.$csName.version
     $channelValues = $channels | Get-Member -MemberType NoteProperty
     $searchResults = @()
 
@@ -901,10 +934,26 @@ function Find-FromUrl
         $Name = "*"
     }
 
+    # Set the default channel, allowing $RequireVversion to override when set to a channel name.
+    $defaultChannel = 'cs'
+    if ($RequiredVersion)
+    {
+        foreach ($channel in $channelValues)
+        {
+            if ($RequiredVersion -eq $channel.Name)
+            {
+                $defaultChannel = $channel.Name
+                $RequiredVersion = $null
+                break
+            }
+        }
+    }
+    $resolvedChannel  = Resolve-ChannelAlias -Channels $channels -Channel $defaultChannel
+
     # if no versions are mentioned, just provide the default version, i.e.: CS 
     if((-not ($MinimumVersion -or $MaximumVersion -or $RequiredVersion -or $AllVersions)))
     {
-        $RequiredVersion = $csVersion
+        $RequiredVersion = $channels.$resolvedChannel.version
     }
 
     # if a particular version is requested, provide that version only
@@ -916,7 +965,8 @@ function Find-FromUrl
             $searchResults += $obj
             return $searchResults
         }
-        else {
+        else
+        {
             return $null
         }
     }
@@ -927,16 +977,15 @@ function Find-FromUrl
     # compare different versions
     foreach($channel in $channelValues)
     {
-        if($channel.Name -eq "cs")
+        if($channel.Name -eq $defaultChannel)
         {
             continue
         }
         else 
         {
             $dockerName = "Docker"
-            $versionName = $channel.Name
+            $versionName = Resolve-ChannelAlias -Channels $channels -Channel $channel.Name
             $versionValue = $channels.$versionName.version
-            if($versionName -eq $csName){$versionName = "cs"}
 
             $toggle = $false
 
@@ -1172,7 +1221,7 @@ function New-SoftwareIdentityFromDockerInfo
                     Version = $DockerInfo.Version;
                     Source = $DockerInfo.SourceName;
                     versionScheme  = "MultiPartNumeric";
-                    Summary = $DockerInfo.Description;                    
+                    Summary = $DockerInfo.Description;
                 }
 
     New-SoftwareIdentity @params
@@ -1192,14 +1241,14 @@ function Set-ModuleSourcesVariable
         $script:DockerSources = [ordered]@{}
                 
         $defaultModuleSource = Microsoft.PowerShell.Utility\New-Object PSCustomObject -Property ([ordered]@{
-            Name = "DockerDefault"
+            Name = "Docker"
             SourceLocation = $script:dockerURL
             Trusted=$false
             Registered= $true
             InstallationPolicy = "Untrusted"
         })
 
-        $script:DockerSources.Add("DockerDefault", $defaultModuleSource)
+        $script:DockerSources.Add("Docker", $defaultModuleSource)
         Save-ModuleSources
     }
 }
@@ -1537,12 +1586,10 @@ function DownloadFile
         if($downloadURL.StartsWith("https://"))
         {
             Write-Verbose "Downloading $downloadUrl to $destination"
-            $saveItemPath = $PSScriptRoot + "\SaveHTTPItemUsingBITS.psm1"
-            Import-Module "$saveItemPath"
             $startTime = Get-Date
             Write-Verbose "About to download"
-            Save-HTTPItemUsingBitsTransfer -Uri $downloadURL `
-                            -Destination $destination
+            Invoke-WebRequest -Uri $downloadURL `
+                              -OutFile $destination
 
             Write-Verbose "Finished downloading"
             $endTime = Get-Date
@@ -1727,7 +1774,7 @@ function Install-NuGetClientBinary
         return
     }
 
-    $InstallNuGetProviderShouldContinueQuery = "DockerMsftProvider requires NuGet provider. The NuGet provider must be available in '{0}' or '{1}'. You can also install the NuGet provider by running 'Install-PackageProvider -Name NuGet -Force'. Do you want DockerMsftProvider to install and import the NuGet provider now?"
+    $InstallNuGetProviderShouldContinueQuery = "DockerProvider requires NuGet provider. The NuGet provider must be available in '{0}' or '{1}'. You can also install the NuGet provider by running 'Install-PackageProvider -Name NuGet -Force'. Do you want DockerProvider to install and import the NuGet provider now?"
     $InstallNuGetProviderShouldContinueCaption = "NuGet provider is required to continue"
     $CouldNotInstallNuGetProvider = "NuGet provider is required. Please ensure that NuGet provider is installed."
     $DownloadingNugetProvider = "Installing NuGet provider."
@@ -1828,149 +1875,3 @@ function Install-NuGetClientBinary
 }
 
 #endregion
-
-# SIG # Begin signature block
-# MIIasAYJKoZIhvcNAQcCoIIaoTCCGp0CAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
-# gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUzHHhzwn9XlMl7LCEcf139UpY
-# 6VOgghWDMIIEwzCCA6ugAwIBAgITMwAAALgYPKjXA3t9ggAAAAAAuDANBgkqhkiG
-# 9w0BAQUFADB3MQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4G
-# A1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSEw
-# HwYDVQQDExhNaWNyb3NvZnQgVGltZS1TdGFtcCBQQ0EwHhcNMTYwOTA3MTc1ODQ1
-# WhcNMTgwOTA3MTc1ODQ1WjCBszELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hp
-# bmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jw
-# b3JhdGlvbjENMAsGA1UECxMETU9QUjEnMCUGA1UECxMebkNpcGhlciBEU0UgRVNO
-# OjdEMkUtMzc4Mi1CMEY3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFtcCBT
-# ZXJ2aWNlMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnaLG0E/Tu86w
-# owRN6AiltXrcmafSmbdl78ODWZEpnPV2rV91m1UxxEVn7L1gt/exIySWKBgy0zIH
-# XIXBnVmOO7s8588G/Qq0f7pLzFnfFXFBzDBlVgVHmB7Ak/SQ66Is5TEqd0TyF9ff
-# Gv2ooVfaWe2S4RXSp7lhQfB7oH4e2jevuq95SAdNGFkzOhJqmxuaFpU9rXDJqKPx
-# QTqvv8qfnaKZBfQre8sfpaFbJOpaZgx0zWcCL4OKtxiRaC1SwPn7PUoT6aXD1lbQ
-# 2A1aXm1RelZDXObiflpUSLnSZEKs37JvErwzoIIz1jA2DT8UfEUBfO+0NLRogoL/
-# 87WD7Bv5fQIDAQABo4IBCTCCAQUwHQYDVR0OBBYEFJG/eoXgR5qRzeoSYD0njQuK
-# MU6CMB8GA1UdIwQYMBaAFCM0+NlSRnAK7UD7dvuzK7DDNbMPMFQGA1UdHwRNMEsw
-# SaBHoEWGQ2h0dHA6Ly9jcmwubWljcm9zb2Z0LmNvbS9wa2kvY3JsL3Byb2R1Y3Rz
-# L01pY3Jvc29mdFRpbWVTdGFtcFBDQS5jcmwwWAYIKwYBBQUHAQEETDBKMEgGCCsG
-# AQUFBzAChjxodHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpL2NlcnRzL01pY3Jv
-# c29mdFRpbWVTdGFtcFBDQS5jcnQwEwYDVR0lBAwwCgYIKwYBBQUHAwgwDQYJKoZI
-# hvcNAQEFBQADggEBACNjoS6XJKHJZbomlN/SYgCUqHRYj2pE3Gad4Ey0L5lo2o0w
-# pbIXKvWLcuRw4HjGQOeu59IPh2YoJszmbiMYeGI7fAan95UyvaLC1TJ8bdljy5nF
-# tQCuxVP0RfhNrp9DYNs2baYB7FIe9DQ3fjb3OuoEYIcjFAl8JEX/l5ANWcS1n9SN
-# KagAdS/9piabhNUutyV4xb5HuQXBiXZZmHzYLdenq+SkHYlL1/Yu2Hx6Dx2d/CCh
-# oLLfMJ+9bTinZLxL6kL75Nv08HyBlilnpgDMO30o8M/udMfcIj8BszosMJ84cTw+
-# QR7BgiBbz2Lkk3UufsxgSSggcyhpJH8MlwgoLoEwggTtMIID1aADAgECAhMzAAAB
-# QJap7nBW/swHAAEAAAFAMA0GCSqGSIb3DQEBBQUAMHkxCzAJBgNVBAYTAlVTMRMw
-# EQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVN
-# aWNyb3NvZnQgQ29ycG9yYXRpb24xIzAhBgNVBAMTGk1pY3Jvc29mdCBDb2RlIFNp
-# Z25pbmcgUENBMB4XDTE2MDgxODIwMTcxN1oXDTE3MTEwMjIwMTcxN1owgYMxCzAJ
-# BgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25k
-# MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xDTALBgNVBAsTBE1PUFIx
-# HjAcBgNVBAMTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjCCASIwDQYJKoZIhvcNAQEB
-# BQADggEPADCCAQoCggEBANtLi+kDal/IG10KBTnk1Q6S0MThi+ikDQUZWMA81ynd
-# ibdobkuffryavVSGOanxODUW5h2s+65r3Akw77ge32z4SppVl0jII4mzWSc0vZUx
-# R5wPzkA1Mjf+6fNPpBqks3m8gJs/JJjE0W/Vf+dDjeTc8tLmrmbtBDohlKZX3APb
-# LMYb/ys5qF2/Vf7dSd9UBZSrM9+kfTGmTb1WzxYxaD+Eaxxt8+7VMIruZRuetwgc
-# KX6TvfJ9QnY4ItR7fPS4uXGew5T0goY1gqZ0vQIz+lSGhaMlvqqJXuI5XyZBmBre
-# ueZGhXi7UTICR+zk+R+9BFF15hKbduuFlxQiCqET92ECAwEAAaOCAWEwggFdMBMG
-# A1UdJQQMMAoGCCsGAQUFBwMDMB0GA1UdDgQWBBSc5ehtgleuNyTe6l6pxF+QHc7Z
-# ezBSBgNVHREESzBJpEcwRTENMAsGA1UECxMETU9QUjE0MDIGA1UEBRMrMjI5ODAz
-# K2Y3ODViMWMwLTVkOWYtNDMxNi04ZDZhLTc0YWU2NDJkZGUxYzAfBgNVHSMEGDAW
-# gBTLEejK0rQWWAHJNy4zFha5TJoKHzBWBgNVHR8ETzBNMEugSaBHhkVodHRwOi8v
-# Y3JsLm1pY3Jvc29mdC5jb20vcGtpL2NybC9wcm9kdWN0cy9NaWNDb2RTaWdQQ0Ff
-# MDgtMzEtMjAxMC5jcmwwWgYIKwYBBQUHAQEETjBMMEoGCCsGAQUFBzAChj5odHRw
-# Oi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpL2NlcnRzL01pY0NvZFNpZ1BDQV8wOC0z
-# MS0yMDEwLmNydDANBgkqhkiG9w0BAQUFAAOCAQEAa+RW49cTHSBA+W3p3k7bXR7G
-# bCaj9+UJgAz/V+G01Nn5XEjhBn/CpFS4lnr1jcmDEwxxv/j8uy7MFXPzAGtOJar0
-# xApylFKfd00pkygIMRbZ3250q8ToThWxmQVEThpJSSysee6/hU+EbkfvvtjSi0lp
-# DimD9aW9oxshraKlPpAgnPWfEj16WXVk79qjhYQyEgICamR3AaY5mLPuoihJbKwk
-# Mig+qItmLPsC2IMvI5KR91dl/6TV6VEIlPbW/cDVwCBF/UNJT3nuZBl/YE7ixMpT
-# Th/7WpENW80kg3xz6MlCdxJfMSbJsM5TimFU98KNcpnxxbYdfqqQhAQ6l3mtYDCC
-# BbwwggOkoAMCAQICCmEzJhoAAAAAADEwDQYJKoZIhvcNAQEFBQAwXzETMBEGCgmS
-# JomT8ixkARkWA2NvbTEZMBcGCgmSJomT8ixkARkWCW1pY3Jvc29mdDEtMCsGA1UE
-# AxMkTWljcm9zb2Z0IFJvb3QgQ2VydGlmaWNhdGUgQXV0aG9yaXR5MB4XDTEwMDgz
-# MTIyMTkzMloXDTIwMDgzMTIyMjkzMloweTELMAkGA1UEBhMCVVMxEzARBgNVBAgT
-# Cldhc2hpbmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29m
-# dCBDb3Jwb3JhdGlvbjEjMCEGA1UEAxMaTWljcm9zb2Z0IENvZGUgU2lnbmluZyBQ
-# Q0EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCycllcGTBkvx2aYCAg
-# Qpl2U2w+G9ZvzMvx6mv+lxYQ4N86dIMaty+gMuz/3sJCTiPVcgDbNVcKicquIEn0
-# 8GisTUuNpb15S3GbRwfa/SXfnXWIz6pzRH/XgdvzvfI2pMlcRdyvrT3gKGiXGqel
-# cnNW8ReU5P01lHKg1nZfHndFg4U4FtBzWwW6Z1KNpbJpL9oZC/6SdCnidi9U3RQw
-# WfjSjWL9y8lfRjFQuScT5EAwz3IpECgixzdOPaAyPZDNoTgGhVxOVoIoKgUyt0vX
-# T2Pn0i1i8UU956wIAPZGoZ7RW4wmU+h6qkryRs83PDietHdcpReejcsRj1Y8wawJ
-# XwPTAgMBAAGjggFeMIIBWjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTLEejK
-# 0rQWWAHJNy4zFha5TJoKHzALBgNVHQ8EBAMCAYYwEgYJKwYBBAGCNxUBBAUCAwEA
-# ATAjBgkrBgEEAYI3FQIEFgQU/dExTtMmipXhmGA7qDFvpjy82C0wGQYJKwYBBAGC
-# NxQCBAweCgBTAHUAYgBDAEEwHwYDVR0jBBgwFoAUDqyCYEBWJ5flJRP8KuEKU5VZ
-# 5KQwUAYDVR0fBEkwRzBFoEOgQYY/aHR0cDovL2NybC5taWNyb3NvZnQuY29tL3Br
-# aS9jcmwvcHJvZHVjdHMvbWljcm9zb2Z0cm9vdGNlcnQuY3JsMFQGCCsGAQUFBwEB
-# BEgwRjBEBggrBgEFBQcwAoY4aHR0cDovL3d3dy5taWNyb3NvZnQuY29tL3BraS9j
-# ZXJ0cy9NaWNyb3NvZnRSb290Q2VydC5jcnQwDQYJKoZIhvcNAQEFBQADggIBAFk5
-# Pn8mRq/rb0CxMrVq6w4vbqhJ9+tfde1MOy3XQ60L/svpLTGjI8x8UJiAIV2sPS9M
-# uqKoVpzjcLu4tPh5tUly9z7qQX/K4QwXaculnCAt+gtQxFbNLeNK0rxw56gNogOl
-# VuC4iktX8pVCnPHz7+7jhh80PLhWmvBTI4UqpIIck+KUBx3y4k74jKHK6BOlkU7I
-# G9KPcpUqcW2bGvgc8FPWZ8wi/1wdzaKMvSeyeWNWRKJRzfnpo1hW3ZsCRUQvX/Ta
-# rtSCMm78pJUT5Otp56miLL7IKxAOZY6Z2/Wi+hImCWU4lPF6H0q70eFW6NB4lhhc
-# yTUWX92THUmOLb6tNEQc7hAVGgBd3TVbIc6YxwnuhQ6MT20OE049fClInHLR82zK
-# wexwo1eSV32UjaAbSANa98+jZwp0pTbtLS8XyOZyNxL0b7E8Z4L5UrKNMxZlHg6K
-# 3RDeZPRvzkbU0xfpecQEtNP7LN8fip6sCvsTJ0Ct5PnhqX9GuwdgR2VgQE6wQuxO
-# 7bN2edgKNAltHIAxH+IOVN3lofvlRxCtZJj/UBYufL8FIXrilUEnacOTj5XJjdib
-# Ia4NXJzwoq6GaIMMai27dmsAHZat8hZ79haDJLmIz2qoRzEvmtzjcT3XAH5iR9HO
-# iMm4GPoOco3Boz2vAkBq/2mbluIQqBC0N1AI1sM9MIIGBzCCA++gAwIBAgIKYRZo
-# NAAAAAAAHDANBgkqhkiG9w0BAQUFADBfMRMwEQYKCZImiZPyLGQBGRYDY29tMRkw
-# FwYKCZImiZPyLGQBGRYJbWljcm9zb2Z0MS0wKwYDVQQDEyRNaWNyb3NvZnQgUm9v
-# dCBDZXJ0aWZpY2F0ZSBBdXRob3JpdHkwHhcNMDcwNDAzMTI1MzA5WhcNMjEwNDAz
-# MTMwMzA5WjB3MQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4G
-# A1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSEw
-# HwYDVQQDExhNaWNyb3NvZnQgVGltZS1TdGFtcCBQQ0EwggEiMA0GCSqGSIb3DQEB
-# AQUAA4IBDwAwggEKAoIBAQCfoWyx39tIkip8ay4Z4b3i48WZUSNQrc7dGE4kD+7R
-# p9FMrXQwIBHrB9VUlRVJlBtCkq6YXDAm2gBr6Hu97IkHD/cOBJjwicwfyzMkh53y
-# 9GccLPx754gd6udOo6HBI1PKjfpFzwnQXq/QsEIEovmmbJNn1yjcRlOwhtDlKEYu
-# J6yGT1VSDOQDLPtqkJAwbofzWTCd+n7Wl7PoIZd++NIT8wi3U21StEWQn0gASkdm
-# EScpZqiX5NMGgUqi+YSnEUcUCYKfhO1VeP4Bmh1QCIUAEDBG7bfeI0a7xC1Un68e
-# eEExd8yb3zuDk6FhArUdDbH895uyAc4iS1T/+QXDwiALAgMBAAGjggGrMIIBpzAP
-# BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBQjNPjZUkZwCu1A+3b7syuwwzWzDzAL
-# BgNVHQ8EBAMCAYYwEAYJKwYBBAGCNxUBBAMCAQAwgZgGA1UdIwSBkDCBjYAUDqyC
-# YEBWJ5flJRP8KuEKU5VZ5KShY6RhMF8xEzARBgoJkiaJk/IsZAEZFgNjb20xGTAX
-# BgoJkiaJk/IsZAEZFgltaWNyb3NvZnQxLTArBgNVBAMTJE1pY3Jvc29mdCBSb290
-# IENlcnRpZmljYXRlIEF1dGhvcml0eYIQea0WoUqgpa1Mc1j0BxMuZTBQBgNVHR8E
-# STBHMEWgQ6BBhj9odHRwOi8vY3JsLm1pY3Jvc29mdC5jb20vcGtpL2NybC9wcm9k
-# dWN0cy9taWNyb3NvZnRyb290Y2VydC5jcmwwVAYIKwYBBQUHAQEESDBGMEQGCCsG
-# AQUFBzAChjhodHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpL2NlcnRzL01pY3Jv
-# c29mdFJvb3RDZXJ0LmNydDATBgNVHSUEDDAKBggrBgEFBQcDCDANBgkqhkiG9w0B
-# AQUFAAOCAgEAEJeKw1wDRDbd6bStd9vOeVFNAbEudHFbbQwTq86+e4+4LtQSooxt
-# YrhXAstOIBNQmd16QOJXu69YmhzhHQGGrLt48ovQ7DsB7uK+jwoFyI1I4vBTFd1P
-# q5Lk541q1YDB5pTyBi+FA+mRKiQicPv2/OR4mS4N9wficLwYTp2OawpylbihOZxn
-# LcVRDupiXD8WmIsgP+IHGjL5zDFKdjE9K3ILyOpwPf+FChPfwgphjvDXuBfrTot/
-# xTUrXqO/67x9C0J71FNyIe4wyrt4ZVxbARcKFA7S2hSY9Ty5ZlizLS/n+YWGzFFW
-# 6J1wlGysOUzU9nm/qhh6YinvopspNAZ3GmLJPR5tH4LwC8csu89Ds+X57H2146So
-# dDW4TsVxIxImdgs8UoxxWkZDFLyzs7BNZ8ifQv+AeSGAnhUwZuhCEl4ayJ4iIdBD
-# 6Svpu/RIzCzU2DKATCYqSCRfWupW76bemZ3KOm+9gSd0BhHudiG/m4LBJ1S2sWo9
-# iaF2YbRuoROmv6pH8BJv/YoybLL+31HIjCPJZr2dHYcSZAI9La9Zj7jkIeW1sMpj
-# tHhUBdRBLlCslLCleKuzoJZ1GtmShxN1Ii8yqAhuoFuMJb+g74TKIdbrHk/Jmu5J
-# 4PcBZW+JC33Iacjmbuqnl84xKf8OxVtc2E0bodj6L54/LlUWa8kTo/0xggSXMIIE
-# kwIBATCBkDB5MQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4G
-# A1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSMw
-# IQYDVQQDExpNaWNyb3NvZnQgQ29kZSBTaWduaW5nIFBDQQITMwAAAUCWqe5wVv7M
-# BwABAAABQDAJBgUrDgMCGgUAoIGwMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEE
-# MBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMCMGCSqGSIb3DQEJBDEWBBRZ
-# AIHpQTDoELhn6blUOcIlB1rHxTBQBgorBgEEAYI3AgEMMUIwQKAWgBQAUABvAHcA
-# ZQByAFMAaABlAGwAbKEmgCRodHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vUG93ZXJT
-# aGVsbCAwDQYJKoZIhvcNAQEBBQAEggEAHV7gKC9GOrD0sw6DlRzi/3cD/8j2asfM
-# mvhwYdTFhKl4VNOrpzZVK1mWoMM5tOA8B4ylJ1nRm4zKYNuUHEmlGlzxDQL5w/w9
-# /ti3Qf+BitEQMHM5BegoY2hQx5mztANtaGEVh52pfDqDPs8h7N69MYFIMD+eAK2M
-# EKfPyliUjG6Jh1QEls5QnORvi3YGkd8bOlppUkOGxNgWNoPDe+7DkRhDUoQX6AYs
-# fvpf1Bh7B0moeLVml5EVMt4oHp5IHqdovXYm9WI1v3W6J548P1RSk1CCUOOe0A+q
-# SoNlkd4ogMnq46gCgNthXUS3ccQ3eoA85l1bvCZKvEw8AyDkgSz8uqGCAigwggIk
-# BgkqhkiG9w0BCQYxggIVMIICEQIBATCBjjB3MQswCQYDVQQGEwJVUzETMBEGA1UE
-# CBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9z
-# b2Z0IENvcnBvcmF0aW9uMSEwHwYDVQQDExhNaWNyb3NvZnQgVGltZS1TdGFtcCBQ
-# Q0ECEzMAAAC4GDyo1wN7fYIAAAAAALgwCQYFKw4DAhoFAKBdMBgGCSqGSIb3DQEJ
-# AzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkFMQ8XDTE2MTAxODE3NDE0M1owIwYJ
-# KoZIhvcNAQkEMRYEFMQbDhzYY94JamyJ2C5fC5Pd4B4MMA0GCSqGSIb3DQEBBQUA
-# BIIBAEH634pSAAfAQZKMvwNJa2Jl/M6Fb2moo6nDzKhrdXej35+JhmdwnXPy+Wfw
-# Swgw5gjuBJCULoJULYHj1R6ShlmPgrKutn2H81cuw+7B8brkM7pEgTw+IY+AEZ/L
-# HZi+jcilgZhk4Da2NEh4CrtP0IQQKWI22xY4pBF45NoiXW+yB3WQAwqMXoOHTuiv
-# Ha5vL+4FSyOXFgbq6iz9uv/YTMwH8rmMuEOKPJ/lQdQ1Nmfgy4R0/XdwPT3+55IR
-# FrwXvk+IbzsP2vibKK+1z/OOd1MdwkMKdLaJXSl1bdO904lQs7I29yHz5wWJEylv
-# QeHAvMTDwuaoIWmmbEWG7SwHV08=
-# SIG # End signature block
