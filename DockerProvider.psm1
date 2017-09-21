@@ -551,7 +551,7 @@ function UninstallHelper
         $null = Get-ChildItem -Path $env:ProgramFiles\Docker -Recurse | Remove-Item -force -Recurse
 
         if(Test-Path $env:ProgramFiles\Docker) {$null = Remove-Item $env:ProgramFiles\Docker -Force}
-        if(Test-Path "$env:ProgramFiles\Linux Containers") {$null = Remove-Item "$env:ProgramFiles\Linux Containers" -Force -Recuse}
+        if(Test-Path "$env:ProgramFiles\Linux Containers") {$null = Remove-Item "$env:ProgramFiles\Linux Containers" -Force -Recurse}
     }
     else 
     {
