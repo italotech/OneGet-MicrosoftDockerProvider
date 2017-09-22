@@ -12,7 +12,7 @@
 RootModule = 'DockerProvider.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.0.0.2'
+ModuleVersion = '0.0.0.3'
 
 # ID used to uniquely identify this module
 GUID = 'f8dfd4ee-8d92-484d-9813-9cf454f0d23f'
